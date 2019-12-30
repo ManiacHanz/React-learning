@@ -13,6 +13,8 @@ react是很复杂，但是也不能一口全吞式的吃进去
 ## Fiber
 
 *Fiber只是一个对象，其中的属性记录了很多信息，这些信息在不同的阶段对应不同的处理方法*，不要把它想的太神秘
+这里放个图，可以看个大概
+![reactFiberRoot]('./image/0、reactFiberRoot结构截图.png)
 
 ## setState -- 同步？异步？
 
