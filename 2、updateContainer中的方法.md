@@ -77,7 +77,11 @@ export function computeExpirationForFiber(
   fiber: Fiber,
   suspenseConfig: null | SuspenseConfig,
 ): ExpirationTime {
-  /** mode = 0 */
+  /** 
+    mode = 0
+    用来描述当前Fiber和他子树的`Bitfield`
+    共存的模式表示这个子树是否默认是异步渲染的
+   */
   const mode = fiber.mode;
   /**
    * 第一次进来的时候 mode 0 所以 与上 任何值肯定都是0  === NoMode
@@ -86,7 +90,8 @@ export function computeExpirationForFiber(
   if ((mode & BatchedMode) === NoMode) {
     return Sync;
   }
-
+  // 获取优先级 一共有5个等级
+  // 再根据不同
   const priorityLevel = getCurrentPriorityLevel();
   if ((mode & ConcurrentMode) === NoMode) {
     return priorityLevel === ImmediatePriority ? Sync : Batched;
@@ -97,6 +102,7 @@ export function computeExpirationForFiber(
     return renderExpirationTime;
   }
 
+  // 关于lazy和suspense， 先略过
   let expirationTime;
   if (suspenseConfig !== null) {
     // Compute an expiration time based on the Suspense timeout.

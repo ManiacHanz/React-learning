@@ -183,9 +183,10 @@ export function updateContainer(
   // suspenseConfig 和 lazy 有关， 暂时略过
   const suspenseConfig = requestCurrentSuspenseConfig();
   /**
-   * 通过currentTime去拿expirationTime，这就是比较重要的计算时间的方法
-   * 通过ReactDOM.render走进来的时候 这里会是 Sync 最大的值
+   * 通过currentTime去拿expirationTime
+   * 通过ReactDOM.render走进来的时候 这里返回的会是 Sync 最大的值
 	 * 表示优先级最大，需要立即调度执行
+	 * ps：关于最重要的computeExpirationTime这里还没提到 就放在后面讲
    */
   const expirationTime = computeExpirationForFiber(
     currentTime,
