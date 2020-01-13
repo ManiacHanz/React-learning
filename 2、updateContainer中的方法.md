@@ -238,6 +238,7 @@ function scheduleRootUpdate(
 
 来看看 `update`相关的方法。
 `createUpdate`，很简单，就是单纯的返回一个初始化对象，可以大概浏览一下上面有哪些属性，有个印象  
+`enqueueUpdate`，根据初始化或者是后续更新，来取到一个能形成链表的`queue`对象，并且结合上`update`对象。(queue负责链接，update负责记录更新信息)最后把结合后的`updateQueue`链接起来形成链表
 
 ```js
 // react-reconciler/src/ReactUpdateQueue.js
@@ -298,6 +299,11 @@ export function enqueueUpdate<State>(fiber: Fiber, update: Update<State>) {
       queue1 = fiber.updateQueue = createUpdateQueue(fiber.memoizedState);
     }
   } else {
+    // 下面的流程是后续的更新流程 因为alternate不为null，所以已经有了alternate
+    // 在目前来说就姑且把下面的理解成 把通过create或者clone的update对象
+    // 分别挂在fiber.updateQueue 或者是 alternate.updateQueue上
+    // 更新的流程不想看可以先略过了
+    // 后续其他流程会再看这里
     // There are two owners.
     queue1 = fiber.updateQueue;
     queue2 = alternate.updateQueue;
@@ -354,6 +360,35 @@ export function enqueueUpdate<State>(fiber: Fiber, update: Update<State>) {
   }
 }
 
+// createUpdateQueue
+export function createUpdateQueue<State>(baseState: State): UpdateQueue<State> {
+  const queue: UpdateQueue<State> = {
+    baseState,
+    firstUpdate: null,
+    lastUpdate: null,
+    firstCapturedUpdate: null,
+    lastCapturedUpdate: null,
+    firstEffect: null,
+    lastEffect: null,
+    firstCapturedEffect: null,
+    lastCapturedEffect: null,
+  };
+  return queue;
+}
 
+// appendUpdateToQueue
+function appendUpdateToQueue<State>(
+  queue: UpdateQueue<State>,
+  update: Update<State>,
+) {
+  // Append the update to the end of the list.
+  if (queue.lastUpdate === null) {
+    // Queue is empty
+    queue.firstUpdate = queue.lastUpdate = update;
+  } else {
+    queue.lastUpdate.next = update;
+    queue.lastUpdate = update;
+  }
+}
 ```
 
