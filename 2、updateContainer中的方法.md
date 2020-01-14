@@ -392,3 +392,4 @@ function appendUpdateToQueue<State>(
 }
 ```
 
+关于fiber上的updateQueue的初始化到这里就告一段落了，下一节从schedule开始讲react的调度部分了
