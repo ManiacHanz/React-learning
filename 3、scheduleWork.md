@@ -89,7 +89,7 @@ export function scheduleUpdateOnFiber(
 	 * 暂时不知道是哪个值过来的
    */
   const priorityLevel = getCurrentPriorityLevel();
-
+	// 记得expirationTime进来的值为sync么
   if (expirationTime === Sync) {
     if (
       // Check if we're inside unbatchedUpdates
@@ -105,11 +105,8 @@ export function scheduleUpdateOnFiber(
       // This is a legacy edge case. The initial mount of a ReactDOM.render-ed
       // root inside of batchedUpdates should be synchronous, but layout updates
       // should be deferred until the end of the batch.
-      /**
-        这里renderRoot开始就是循环遍历更新所以子节点的过程
-        涉及到performUnitOfWork  beginWork等等
-        这里复杂的放在后面需要单独解释
-       */
+      // 表示render应该立即执行，但是更新应该推迟到批量更新之后
+			// 于是要进入renderRoot 看看这个函数，已经返回的函数执行都是啥
       let callback = renderRoot(root, Sync, true);
       while (callback !== null) {
         callback = callback(true);
@@ -150,12 +147,6 @@ export function scheduleUpdateOnFiber(
 }
 export const scheduleWork = scheduleUpdateOnFiber;
 
-```
-
-下面是分开的使用的几个方法的代码
-
-```js
-// react-reconciler/src/ReactFiberWorkLoop
 
 
 function markUpdateTimeFromFiberToRoot(fiber, expirationTime) {
@@ -226,3 +217,5 @@ function markUpdateTimeFromFiberToRoot(fiber, expirationTime) {
   return root;
 }
 ```
+
+`renderRoot`是一个相当长的方法，我们下章见
