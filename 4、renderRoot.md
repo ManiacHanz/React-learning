@@ -20,7 +20,13 @@ function renderRoot(
   // 而renderExpirationTime此时为NoWork，唯一会变成expirationTime的时候就是在下面的prepareFreshStack方法里
   // 在commit阶段会重置为NoWork
   if (root !== workInProgressRoot || expirationTime !== renderExpirationTime) {
+    // freshStack  大致是重置一些root上的属性，以及这个文件里的全局变量
+    // 同时会创建或者修改workInProgress，使值同current的同步，或重置
     prepareFreshStack(root, expirationTime);
+    // 将调度优先级高的interaction加入到interactions中
+    // 用一个 Set类型呃变量 interactions，存储优先级比expirationTime更高的interaction
+    // 相当于当前的操作被优先级更高的操作插队了
+    // 
     startWorkOnPendingInteractions(root, expirationTime);
   } else if (workInProgressRootExitStatus === RootSuspendedWithDelay) {
     // 和被推迟的低优先级的更新相关 ，先略
@@ -28,6 +34,8 @@ function renderRoot(
 
   // If we have a work-in-progress fiber, it means there's still work to do
   // in this root.
+  // workInProgress只有在初始化的时候是null,然后在commit阶段结束后为Null
+  // 这里是刚刚被赋值成的createWorkInProgress，所以需要往里面去进行一系列操作
   if (workInProgress !== null) {
     const prevExecutionContext = executionContext;
     executionContext |= RenderContext;
