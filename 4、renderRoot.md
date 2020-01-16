@@ -37,30 +37,22 @@ function renderRoot(
   // workInProgress只有在初始化的时候是null,然后在commit阶段结束后为Null
   // 这里是刚刚被赋值成的createWorkInProgress，所以需要往里面去进行一系列操作
   if (workInProgress !== null) {
+    // 把当前的executionContext记录下来，然后用|= 表示进入render状态
+    // 在后面再把执行上下文复原
     const prevExecutionContext = executionContext;
+    // 0b001000 | 0b010000
     executionContext |= RenderContext;
-    let prevDispatcher = ReactCurrentDispatcher.current;
-    if (prevDispatcher === null) {
-      // The React isomorphic package does not include a default dispatcher.
-      // Instead the first renderer will lazily attach one, in order to give
-      // nicer error messages.
-      prevDispatcher = ContextOnlyDispatcher;
-    }
-    ReactCurrentDispatcher.current = ContextOnlyDispatcher;
-    let prevInteractions: Set<Interaction> | null = null;
-    if (enableSchedulerTracing) {
-      prevInteractions = __interactionsRef.current;
-      __interactionsRef.current = root.memoizedInteractions;
-    }
+    // 这里 = null ，和hooks相关...略过
+    
 
-    startWorkLoopTimer(workInProgress);
-
-    // TODO: Fork renderRoot into renderRootSync and renderRootAsync
+    // isSync = true  expirationTime === Sync
     if (isSync) {
       if (expirationTime !== Sync) {
         // An async update expired. There may be other expired updates on
         // this root. We should render all the expired work in a
         // single batch.
+        // 表示有些异步的更新已经失效了，这里要重新计算时间权重，然后递归重新调用renderRoot
+        // 并且不再传Sync的值进去了
         const currentTime = requestCurrentTime();
         if (currentTime < expirationTime) {
           // Restart at the current time.
@@ -78,11 +70,16 @@ function renderRoot(
     } else {
       // Since we know we're in a React event, we can clear the current
       // event time. The next update will compute a new event time.
+      // currentEventTime会在 requestCurrentTime()方法执行时更新，
+      // 而requestCurrentTime（按照我们当前）的顺序来看是在updateContainer执行的
+      // 并且已经给后续的流程用完了
+      // 这里把它重置，是的下一轮的update过程，又可以获得一个新的时间权重
       currentEventTime = NoWork;
     }
 
     do {
       try {
+        // workLoop  一个递归函数 
         if (isSync) {
           workLoopSync();
         } else {
@@ -90,47 +87,22 @@ function renderRoot(
         }
         break;
       } catch (thrownValue) {
-        // Reset module-level state that was set during the render phase.
-        resetContextDependencies();
-        resetHooks();
-
-        const sourceFiber = workInProgress;
-        if (sourceFiber === null || sourceFiber.return === null) {
-          // Expected to be working on a non-root fiber. This is a fatal error
-          // because there's no ancestor that can handle it; the root is
-          // supposed to capture all errors that weren't caught by an error
-          // boundary.
-          prepareFreshStack(root, expirationTime);
-          executionContext = prevExecutionContext;
-          throw thrownValue;
-        }
-
-        if (enableProfilerTimer && sourceFiber.mode & ProfileMode) {
-          // Record the time spent rendering before an error was thrown. This
-          // avoids inaccurate Profiler durations in the case of a
-          // suspended render.
-          stopProfilerTimerIfRunningAndRecordDelta(sourceFiber, true);
-        }
-
-        const returnFiber = sourceFiber.return;
-        throwException(
-          root,
-          returnFiber,
-          sourceFiber,
-          thrownValue,
-          renderExpirationTime,
-        );
-        workInProgress = completeUnitOfWork(sourceFiber);
+        // 如果有错误，有一系列的错误捕获，变量重置，以及执行completeUnitOfWork
+        // completeUnitOfWork后续会涉及，大概就是这里捕获了错误，也需要继续把fiber对象处理
+        // 继续执行调度流程
       }
     } while (true);
-
+    // 在workLoop执行完以后，代表commit阶段表示完毕
     executionContext = prevExecutionContext;
+    
+    // dispatcher和hooks相关
     resetContextDependencies();
     ReactCurrentDispatcher.current = prevDispatcher;
     if (enableSchedulerTracing) {
       __interactionsRef.current = ((prevInteractions: any): Set<Interaction>);
     }
-
+    // 这里的workInProgress 在workLoop时已经被改变，这里为null
+    // 后面会仔细讲workLoop
     if (workInProgress !== null) {
       // There's still work left over. Return a continuation.
       stopInterruptedWorkLoopTimer();
@@ -144,10 +116,14 @@ function renderRoot(
   // We now have a consistent tree. The next step is either to commit it, or, if
   // something suspended, wait to commit it after a timeout.
   stopFinishedWorkLoopTimer();
-
+  
+  // 当前的commit阶段结束，把更新过后的workInProgress赋值给root.finishedWork上
+  // 把expirationTime付给root.finishedExpirationTime来保存
   root.finishedWork = root.current.alternate;
   root.finishedExpirationTime = expirationTime;
 
+  // 和root.firstBatch记录的东西相关，
+  // 这里返回false，先不看
   const isLocked = resolveLocksOnRoot(root, expirationTime);
   if (isLocked) {
     // This root has a lock that prevents it from committing. Exit. If we begin
@@ -157,170 +133,21 @@ function renderRoot(
   }
 
   // Set this to null to indicate there's no in-progress render.
+  // 重置workInProgressRoot
   workInProgressRoot = null;
 
+  // workInProgressRootExitStatus
+  // 全局变量，代表这次commit以什么方式结束
+  // 在render 被suspend, didError的时候会被赋值，代表commit出了问题
+  // 这里是正常的 RootCompleted
   switch (workInProgressRootExitStatus) {
     case RootIncomplete: {
-      invariant(false, 'Should have a work-in-progress.');
     }
-    // Flow knows about invariant, so it complains if I add a break statement,
-    // but eslint doesn't know about invariant, so it complains if I do.
-    // eslint-disable-next-line no-fallthrough
     case RootErrored: {
-      // An error was thrown. First check if there is lower priority work
-      // scheduled on this root.
-      const lastPendingTime = root.lastPendingTime;
-      if (lastPendingTime < expirationTime) {
-        // There's lower priority work. Before raising the error, try rendering
-        // at the lower priority to see if it fixes it. Use a continuation to
-        // maintain the existing priority and position in the queue.
-        return renderRoot.bind(null, root, lastPendingTime);
-      }
-      if (!isSync) {
-        // If we're rendering asynchronously, it's possible the error was
-        // caused by tearing due to a mutation during an event. Try rendering
-        // one more time without yiedling to events.
-        prepareFreshStack(root, expirationTime);
-        scheduleSyncCallback(renderRoot.bind(null, root, expirationTime));
-        return null;
-      }
-      // If we're already rendering synchronously, commit the root in its
-      // errored state.
-      return commitRoot.bind(null, root);
     }
     case RootSuspended: {
-      flushSuspensePriorityWarningInDEV();
-
-      // We have an acceptable loading state. We need to figure out if we should
-      // immediately commit it or wait a bit.
-
-      // If we have processed new updates during this render, we may now have a
-      // new loading state ready. We want to ensure that we commit that as soon as
-      // possible.
-      const hasNotProcessedNewUpdates =
-        workInProgressRootLatestProcessedExpirationTime === Sync;
-      if (
-        hasNotProcessedNewUpdates &&
-        !isSync &&
-        // do not delay if we're inside an act() scope
-        !(
-          __DEV__ &&
-          flushSuspenseFallbacksInTests &&
-          IsThisRendererActing.current
-        )
-      ) {
-        // If we have not processed any new updates during this pass, then this is
-        // either a retry of an existing fallback state or a hidden tree.
-        // Hidden trees shouldn't be batched with other work and after that's
-        // fixed it can only be a retry.
-        // We're going to throttle committing retries so that we don't show too
-        // many loading states too quickly.
-        let msUntilTimeout =
-          globalMostRecentFallbackTime + FALLBACK_THROTTLE_MS - now();
-        // Don't bother with a very short suspense time.
-        if (msUntilTimeout > 10) {
-          if (workInProgressRootHasPendingPing) {
-            // This render was pinged but we didn't get to restart earlier so try
-            // restarting now instead.
-            prepareFreshStack(root, expirationTime);
-            return renderRoot.bind(null, root, expirationTime);
-          }
-          const lastPendingTime = root.lastPendingTime;
-          if (lastPendingTime < expirationTime) {
-            // There's lower priority work. It might be unsuspended. Try rendering
-            // at that level.
-            return renderRoot.bind(null, root, lastPendingTime);
-          }
-          // The render is suspended, it hasn't timed out, and there's no lower
-          // priority work to do. Instead of committing the fallback
-          // immediately, wait for more data to arrive.
-          root.timeoutHandle = scheduleTimeout(
-            commitRoot.bind(null, root),
-            msUntilTimeout,
-          );
-          return null;
-        }
-      }
-      // The work expired. Commit immediately.
-      return commitRoot.bind(null, root);
     }
     case RootSuspendedWithDelay: {
-      flushSuspensePriorityWarningInDEV();
-
-      if (
-        !isSync &&
-        // do not delay if we're inside an act() scope
-        !(
-          __DEV__ &&
-          flushSuspenseFallbacksInTests &&
-          IsThisRendererActing.current
-        )
-      ) {
-        // We're suspended in a state that should be avoided. We'll try to avoid committing
-        // it for as long as the timeouts let us.
-        if (workInProgressRootHasPendingPing) {
-          // This render was pinged but we didn't get to restart earlier so try
-          // restarting now instead.
-          prepareFreshStack(root, expirationTime);
-          return renderRoot.bind(null, root, expirationTime);
-        }
-        const lastPendingTime = root.lastPendingTime;
-        if (lastPendingTime < expirationTime) {
-          // There's lower priority work. It might be unsuspended. Try rendering
-          // at that level immediately.
-          return renderRoot.bind(null, root, lastPendingTime);
-        }
-
-        let msUntilTimeout;
-        if (workInProgressRootLatestSuspenseTimeout !== Sync) {
-          // We have processed a suspense config whose expiration time we can use as
-          // the timeout.
-          msUntilTimeout =
-            expirationTimeToMs(workInProgressRootLatestSuspenseTimeout) - now();
-        } else if (workInProgressRootLatestProcessedExpirationTime === Sync) {
-          // This should never normally happen because only new updates cause
-          // delayed states, so we should have processed something. However,
-          // this could also happen in an offscreen tree.
-          msUntilTimeout = 0;
-        } else {
-          // If we don't have a suspense config, we're going to use a heuristic to
-          // determine how long we can suspend.
-          const eventTimeMs: number = inferTimeFromExpirationTime(
-            workInProgressRootLatestProcessedExpirationTime,
-          );
-          const currentTimeMs = now();
-          const timeUntilExpirationMs =
-            expirationTimeToMs(expirationTime) - currentTimeMs;
-          let timeElapsed = currentTimeMs - eventTimeMs;
-          if (timeElapsed < 0) {
-            // We get this wrong some time since we estimate the time.
-            timeElapsed = 0;
-          }
-
-          msUntilTimeout = jnd(timeElapsed) - timeElapsed;
-
-          // Clamp the timeout to the expiration time.
-          // TODO: Once the event time is exact instead of inferred from expiration time
-          // we don't need this.
-          if (timeUntilExpirationMs < msUntilTimeout) {
-            msUntilTimeout = timeUntilExpirationMs;
-          }
-        }
-
-        // Don't bother with a very short suspense time.
-        if (msUntilTimeout > 10) {
-          // The render is suspended, it hasn't timed out, and there's no lower
-          // priority work to do. Instead of committing the fallback
-          // immediately, wait for more data to arrive.
-          root.timeoutHandle = scheduleTimeout(
-            commitRoot.bind(null, root),
-            msUntilTimeout,
-          );
-          return null;
-        }
-      }
-      // The work expired. Commit immediately.
-      return commitRoot.bind(null, root);
     }
     case RootCompleted: {
       // The work completed. Ready to commit.
