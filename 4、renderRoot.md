@@ -353,12 +353,15 @@ function renderRoot(
 ```
 
 `prepareFreshStack`，表示要准备一个新的栈，也就是在有些被打断的时候要通过frest机制防止后续更新影响之前更新到一半的状态
+*可以理解成全部初始化*
+`createWorkInProgress`，创造或者修改一个`workInProgress`对象，方法很简单，可以大概浏览一下这里面的属性以及相应的注释，有个印象
 
 ```js
 function prepareFreshStack(root, expirationTime) {
   root.finishedWork = null;
   root.finishedExpirationTime = NoWork;
-
+  // root.timeoutHandle 初始化为noTimeout 就是-1
+  // cancelTimeout和清理超时有关，涉及到调度部分的时间内容。先不管
   const timeoutHandle = root.timeoutHandle;
   if (timeoutHandle !== noTimeout) {
     // The root previous suspended and scheduled a timeout to commit a fallback
@@ -367,7 +370,11 @@ function prepareFreshStack(root, expirationTime) {
     // $FlowFixMe Complains noTimeout is not a TimeoutID, despite the check above
     cancelTimeout(timeoutHandle);
   }
-
+  // workInProgress 是个全局变量，只有在第一次从ReactDOM.render进来以及完成了commit阶段的时候会设置成null
+  // 用来表示需要调度的单元，后面会在performUnitOfWork等等的流程中看到这个变量
+  // 这里的场景是上次被中断的更新流程，这里通过unwindInterruptedWork去从子到父的清理
+  // 是根据component类型不同清理的不同，
+  // 具体看unwindInterruptedWork。这里不是主流程暂时不细看
   if (workInProgress !== null) {
     let interruptedWork = workInProgress.return;
     while (interruptedWork !== null) {
@@ -375,6 +382,8 @@ function prepareFreshStack(root, expirationTime) {
       interruptedWork = interruptedWork.return;
     }
   }
+  // 把下面的全局变量全部初始化
+  // 这些全局变量会在不同的调度过程中变成不同的值
   workInProgressRoot = root;
   workInProgress = createWorkInProgress(root.current, null, expirationTime);
   renderExpirationTime = expirationTime;
@@ -383,7 +392,91 @@ function prepareFreshStack(root, expirationTime) {
   workInProgressRootLatestSuspenseTimeout = Sync;
   workInProgressRootCanSuspendUsingConfig = null;
   workInProgressRootHasPendingPing = false;
+}
 
-  
+
+
+// react-reconciler/src/ReactFiber.js
+
+// This is used to create an alternate fiber to do work on.
+export function createWorkInProgress(
+  current: Fiber,
+  pendingProps: any,
+  expirationTime: ExpirationTime,
+): Fiber {
+  let workInProgress = current.alternate;
+  if (workInProgress === null) {
+    // We use a double buffering pooling technique because we know that we'll
+    // only ever need at most two versions of a tree. We pool the "other" unused
+    // node that we're free to reuse. This is lazily created to avoid allocating
+    // extra objects for things that are never updated. It also allow us to
+    // reclaim the extra memory if needed.
+
+    // createFiber 是new 了一个 FiberNode
+    workInProgress = createFiber(
+      current.tag,
+      pendingProps,
+      current.key,
+      current.mode,
+    );
+    // 除了初始化的属性以外，之前current已经处理过的一些属性，此时要负载workInProgress上。下面都是老面孔了
+    workInProgress.elementType = current.elementType;
+    workInProgress.type = current.type;
+    workInProgress.stateNode = current.stateNode;
+    // workInProgress和current 互为alternate
+    workInProgress.alternate = current;
+    current.alternate = workInProgress;
+  } else {
+    workInProgress.pendingProps = pendingProps;
+
+    // We already have an alternate.
+    // Reset the effect tag.
+    
+    // 要重置已有的workInProgress的effectTag
+    // 同时effect的链表也要重置
+    workInProgress.effectTag = NoEffect;
+
+    // The effect list is no longer valid.
+    workInProgress.nextEffect = null;
+    workInProgress.firstEffect = null;
+    workInProgress.lastEffect = null;
+
+    if (enableProfilerTimer) {
+      // We intentionally reset, rather than copy, actualDuration & actualStartTime.
+      // This prevents time from endlessly accumulating in new commits.
+      // This has the downside of resetting values for different priority renders,
+      // But works for yielding (the common case) and should support resuming.
+      workInProgress.actualDuration = 0;
+      workInProgress.actualStartTime = -1;
+    }
+  }
+
+  // 和current同步的属性
+  workInProgress.childExpirationTime = current.childExpirationTime;
+  workInProgress.expirationTime = current.expirationTime;
+
+  workInProgress.child = current.child;
+  workInProgress.memoizedProps = current.memoizedProps;
+  workInProgress.memoizedState = current.memoizedState;
+  workInProgress.updateQueue = current.updateQueue;
+
+  // Clone the dependencies object. This is mutated during the render phase, so
+  // it cannot be shared with the current fiber.
+  const currentDependencies = current.dependencies;
+  workInProgress.dependencies =
+    currentDependencies === null
+      ? null
+      : {
+          expirationTime: currentDependencies.expirationTime,
+          firstContext: currentDependencies.firstContext,
+          responders: currentDependencies.responders,
+        };
+
+  // These will be overridden during the parent's reconciliation
+  workInProgress.sibling = current.sibling;
+  workInProgress.index = current.index;
+  workInProgress.ref = current.ref;
+
+  return workInProgress;
 }
 ```
