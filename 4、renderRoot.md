@@ -151,36 +151,13 @@ function renderRoot(
     }
     case RootCompleted: {
       // The work completed. Ready to commit.
-      if (
-        !isSync &&
-        // do not delay if we're inside an act() scope
-        !(
-          __DEV__ &&
-          flushSuspenseFallbacksInTests &&
-          IsThisRendererActing.current
-        ) &&
-        workInProgressRootLatestProcessedExpirationTime !== Sync &&
-        workInProgressRootCanSuspendUsingConfig !== null
-      ) {
-        // If we have exceeded the minimum loading delay, which probably
-        // means we have shown a spinner already, we might have to suspend
-        // a bit longer to ensure that the spinner is shown for enough time.
-        const msUntilTimeout = computeMsUntilSuspenseLoadingDelay(
-          workInProgressRootLatestProcessedExpirationTime,
-          expirationTime,
-          workInProgressRootCanSuspendUsingConfig,
-        );
-        if (msUntilTimeout > 10) {
-          root.timeoutHandle = scheduleTimeout(
-            commitRoot.bind(null, root),
-            msUntilTimeout,
-          );
-          return null;
-        }
-      }
+      // dev环境，并且 !isSync等的条件 。先跳过
+      // 正常的流程就是直接进入commit流程
+      // 包括commitRootImpl什么的，又是一个大流程
       return commitRoot.bind(null, root);
     }
     default: {
+      // 报错
       invariant(false, 'Unknown root exit status.');
     }
   }
@@ -190,6 +167,7 @@ function renderRoot(
 `prepareFreshStack`，表示要准备一个新的栈，也就是在有些被打断的时候要通过frest机制防止后续更新影响之前更新到一半的状态
 *可以理解成全部初始化*
 `createWorkInProgress`，创造或者修改一个`workInProgress`对象，方法很简单，可以大概浏览一下这里面的属性以及相应的注释，有个印象
+`commitRoot`，顺利执行完`workLoop`，正常的结果就是开始进入`commit`阶段。这一部分又非常复杂，我们需要留到下一章看
 
 ```js
 function prepareFreshStack(root, expirationTime) {
@@ -314,4 +292,25 @@ export function createWorkInProgress(
 
   return workInProgress;
 }
+
+
+
+function commitRoot(root) {
+  const renderPriorityLevel = getCurrentPriorityLevel();
+  runWithPriority(
+    ImmediatePriority,
+    commitRootImpl.bind(null, root, renderPriorityLevel),
+  );
+  // If there are passive effects, schedule a callback to flush them. This goes
+  // outside commitRootImpl so that it inherits the priority of the render.
+  if (rootWithPendingPassiveEffects !== null) {
+    scheduleCallback(NormalPriority, () => {
+      flushPassiveEffects();
+      return null;
+    });
+  }
+  return null;
+}
 ```
+
+目前位置我们在`renderRoot`流程里，只剩下两个大流程了，一个是依然属于`render`阶段的`workLoop`及`workLoopSync`，另一个是在下一个commit阶段标志`commitRoot`。下回分晓
