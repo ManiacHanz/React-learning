@@ -170,6 +170,7 @@ function commitRootImpl(root, renderPriorityLevel) {
     // 这个在reactDOM 中可以拿到一些当前节点的信息
     prepareForCommit(root.containerInfo);
     nextEffect = firstEffect;
+    // 第一个循环
     do {
       if (__DEV__) {
         // 帮助错误调试的代码等等..
@@ -191,7 +192,7 @@ function commitRootImpl(root, renderPriorityLevel) {
     } while (nextEffect !== null);
     // 和debug 、profiler有关略
     stopCommitSnapshotEffectsTimer();
-
+    // profiler的不看
     if (enableProfilerTimer) {
       // Mark the current commit time to be shared by all Profilers in this
       // batch. This enables them to be grouped later.
@@ -199,14 +200,18 @@ function commitRootImpl(root, renderPriorityLevel) {
     }
 
     // The next phase is the mutation phase, where we mutate the host tree.
+    // 开始改变整个tree
     startCommitHostEffectsTimer();
     nextEffect = firstEffect;
+    // 第二次循环
+    // 执行完这个循环，整个domtree已经挂载到html上了，页面上已经有渲染了dom元素了
     do {
       if (__DEV__) {
        
       } else {
         try {
-          // 开始commit 同样是用nextEffect
+          // 开始mutate 同样是用nextEffect
+          // 
           commitMutationEffects(renderPriorityLevel);
         } catch (error) {
           invariant(nextEffect !== null, 'Should be working on an effect.');
@@ -217,11 +222,14 @@ function commitRootImpl(root, renderPriorityLevel) {
     } while (nextEffect !== null);
     stopCommitHostEffectsTimer();
     resetAfterCommit(root.containerInfo);
+    // 到此 已经更新完dom节点
+
 
     // The work-in-progress tree is now the current tree. This must come after
     // the mutation phase, so that the previous tree is still current during
     // componentWillUnmount, but before the layout phase, so that the finished
     // work is current during componentDidMount/Update.
+    // 在mutation阶段完成以后再把finishedWork赋给root.current 
     root.current = finishedWork;
 
     // The next phase is the layout phase, where we call effects that read
@@ -371,3 +379,163 @@ function commitRootImpl(root, renderPriorityLevel) {
 ```
 
 
+------------------
+
+`commitMutationEffects`
+
+```js
+function commitMutationEffects(renderPriorityLevel) {
+  // TODO: Should probably move the bulk of this function to commitWork.
+  while (nextEffect !== null) {
+
+    const effectTag = nextEffect.effectTag;
+    // 把effectTag |= ContentReset的情况是在 updateHostComponent 里 也就是需要把里面的text节点全部重置
+    // effectTag 此时是Placement = 3 
+    // 也就是下面两个都不会走进去
+    // 具体的用法 ，等到遇到相应的再进去
+    if (effectTag & ContentReset) {
+      commitResetTextContent(nextEffect);
+    }
+    // 把effectTag |= Ref 的情况是在 completeWork的时候 或者updateHostComponent等等
+    if (effectTag & Ref) {
+      const current = nextEffect.alternate;
+      if (current !== null) {
+        commitDetachRef(current);
+      }
+    }
+
+    // The following switch statement is only concerned about placement,
+    // updates, and deletions. To avoid needing to add a case for every possible
+    // bitmap value, we remove the secondary effects from the effect tag and
+    // switch on that value.
+    // 这里通过位运算 拿到应该执行的操作
+    // 以我们进来的流程进入Placement为例
+    let primaryEffectTag = effectTag & (Placement | Update | Deletion);
+    switch (primaryEffectTag) {
+      case Placement: {
+        commitPlacement(nextEffect);
+        // Clear the "placement" from effect tag so that we know that this is
+        // inserted, before any life-cycles like componentDidMount gets called.
+        // TODO: findDOMNode doesn't rely on this any more but isMounted does
+        // and isMounted is deprecated anyway so we should be able to kill this.
+        nextEffect.effectTag &= ~Placement;
+        break;
+      }
+      case PlacementAndUpdate: {
+        // Placement
+        commitPlacement(nextEffect);
+        // Clear the "placement" from effect tag so that we know that this is
+        // inserted, before any life-cycles like componentDidMount gets called.
+        nextEffect.effectTag &= ~Placement;
+
+        // Update
+        const current = nextEffect.alternate;
+        commitWork(current, nextEffect);
+        break;
+      }
+      case Update: {
+        const current = nextEffect.alternate;
+        commitWork(current, nextEffect);
+        break;
+      }
+      case Deletion: {
+        commitDeletion(nextEffect, renderPriorityLevel);
+        break;
+      }
+    }
+
+    // TODO: Only record a mutation effect if primaryEffectTag is non-zero.
+    recordEffect();
+
+    resetCurrentDebugFiberInDEV();
+    nextEffect = nextEffect.nextEffect;
+  }
+}
+```
+
+这里以一个commitPlacement为例继续追上去。最后在一系列的htmlElement操作的以后，以返回null跳出循环返回到上一步`commitMutationEffects`
+
+```js
+function commitPlacement(finishedWork: Fiber): void {
+  if (!supportsMutation) {
+    return;
+  }
+
+  // Recursively insert all host nodes into the parent.
+  // 会循环fiber.return找到rootFiber
+  const parentFiber = getHostParentFiber(finishedWork);
+
+  // Note: these two variables *must* always be updated together.
+  let parent;
+  let isContainer;
+  const parentStateNode = parentFiber.stateNode;
+  // 通过判断fiber的节点类型， 获取真正的节点信息
+  // 取得它的父节点
+  // 设置是否是容器的变量
+  switch (parentFiber.tag) {
+    case HostComponent:
+    case HostRoot:
+      // 在很早的createFiberRoot时就已经把containerInfo加上去了
+      // 此时是一个root的节点信息
+      parent = parentStateNode.containerInfo;
+      isContainer = true;
+      break;
+    case HostPortal:
+    case FundamentalComponent:
+    // eslint-disable-next-line-no-fallthrough
+    default:
+  }
+  // 同上 略过
+  if (parentFiber.effectTag & ContentReset) {
+    // Reset the text content of the parent before doing any insertions
+    resetTextContent(parent);
+    // Clear ContentReset from the effect tag
+    parentFiber.effectTag &= ~ContentReset;
+  }
+
+  // 当finishedWork是root下的第一个子节点的时候，这是before = null
+  const before = getHostSibling(finishedWork);
+  // We only have the top Fiber that was inserted but we need to recurse down its
+  // children to find all the terminal nodes.
+  let node: Fiber = finishedWork;
+  while (true) {
+    const isHost = node.tag === HostComponent || node.tag === HostText;
+    if (isHost || node.tag === FundamentalComponent) {
+      const stateNode = isHost ? node.stateNode : node.stateNode.instance;
+      if (before) {
+        if (isContainer) {
+          insertInContainerBefore(parent, stateNode, before);
+        } else {
+          insertBefore(parent, stateNode, before);
+        }
+      } else {
+        // 从这里进入 就是htmlElement的基本操作了  执行完这一步 整个dom tree就会添加到节点中
+        if (isContainer) {
+          appendChildToContainer(parent, stateNode);
+        } else {
+          appendChild(parent, stateNode);
+        }
+      }
+    } else if (node.tag === HostPortal) {
+      // If the insertion itself is a portal, then we don't want to traverse
+      // down its children. Instead, we'll get insertions from each child in
+      // the portal directly.
+    } else if (node.child !== null) {
+      node.child.return = node;
+      node = node.child;
+      continue;
+    }
+    if (node === finishedWork) {
+      return;
+    }
+    while (node.sibling === null) {
+      if (node.return === null || node.return === finishedWork) {
+        return;
+      }
+      node = node.return;
+    }
+    node.sibling.return = node.return;
+    node = node.sibling;
+  }
+}
+```
