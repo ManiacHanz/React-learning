@@ -221,6 +221,8 @@ function commitRootImpl(root, renderPriorityLevel) {
       }
     } while (nextEffect !== null);
     stopCommitHostEffectsTimer();
+    // 这里有一个对selection选项恢复的函数
+    // 因为placement的时候节点会摧毁再重新加入，所以有选项的时候要把选中的恢复
     resetAfterCommit(root.containerInfo);
     // 到此 已经更新完dom节点
 
@@ -242,6 +244,8 @@ function commitRootImpl(root, renderPriorityLevel) {
         
       } else {
         try {
+          // 主要是关于 commit完成后 生命周期及钩子的调用
+          // 以及对updateQueue的清理，包括之前提到的`capturedQueue`的处理及update上的callback的调用
           commitLayoutEffects(root, expirationTime);
         } catch (error) {
           invariant(nextEffect !== null, 'Should be working on an effect.');
@@ -251,7 +255,7 @@ function commitRootImpl(root, renderPriorityLevel) {
       }
     } while (nextEffect !== null);
     stopCommitLifeCyclesTimer();
-
+    // 处理完以后必须要置空
     nextEffect = null;
 
     // Tell Scheduler to yield at the end of the frame, so the browser has an
@@ -261,13 +265,16 @@ function commitRootImpl(root, renderPriorityLevel) {
     if (enableSchedulerTracing) {
       __interactionsRef.current = ((prevInteractions: any): Set<Interaction>);
     }
+    // 执行上下文也要变化
     executionContext = prevExecutionContext;
   } else {
     // No effects.
+    // 这里是没有effect的情况
     root.current = finishedWork;
     // Measure these anyway so the flamegraph explicitly shows that there were
     // no effects.
     // TODO: Maybe there's a better way to report this.
+    // 和timer相关的东西，也许是需要上报在没有effect时的效率记录，不太明白
     startCommitSnapshotEffectsTimer();
     stopCommitSnapshotEffectsTimer();
     if (enableProfilerTimer) {
@@ -281,6 +288,8 @@ function commitRootImpl(root, renderPriorityLevel) {
 
   stopCommitTimer();
 
+
+  // 被动的effect  不太懂 ，
   const rootDidHavePassiveEffects = rootDoesHavePassiveEffects;
 
   if (rootDoesHavePassiveEffects) {
@@ -303,6 +312,7 @@ function commitRootImpl(root, renderPriorityLevel) {
   }
 
   // Check if there's remaining work on this root
+  // 如果仍然有剩余的work需要做。这里好像只是一个记录？获取time以及优先级
   const remainingExpirationTime = root.firstPendingTime;
   if (remainingExpirationTime !== NoWork) {
     const currentTime = requestCurrentTime();
@@ -329,6 +339,7 @@ function commitRootImpl(root, renderPriorityLevel) {
   } else {
     // If there's no remaining work, we can clear the set of already failed
     // error boundaries.
+    // 否则做完并且没错误，把全局错误边界设置为null
     legacyErrorBoundariesThatAlreadyFailed = null;
   }
 
@@ -341,9 +352,11 @@ function commitRootImpl(root, renderPriorityLevel) {
       finishPendingInteractions(root, expirationTime);
     }
   }
-
+  // 和开发者工具有关的函数  在 ReactFiberDevToolsHook有关
   onCommitRoot(finishedWork.stateNode, expirationTime);
 
+  // 这里计算未完成的root的最高优先级的重渲染，
+  // 函数内的用来储存剩余work的优先级的变量remainingExpirationTime
   if (remainingExpirationTime === Sync) {
     // Count the number of times the root synchronously re-renders without
     // finishing. If there are too many, it indicates an infinite update loop.
@@ -356,7 +369,7 @@ function commitRootImpl(root, renderPriorityLevel) {
   } else {
     nestedUpdateCount = 0;
   }
-
+  // 未捕获的错误会在这个阶段抛出，即不影响整个流程
   if (hasUncaughtError) {
     hasUncaughtError = false;
     const error = firstUncaughtError;
@@ -373,6 +386,10 @@ function commitRootImpl(root, renderPriorityLevel) {
   }
 
   // If layout work was scheduled, flush it now.
+  // 在调度阶段会把执行优先级为sync的callback放到callbackQueue[]这样一个数组里面
+  // 在此时就会立即执行
+  // 全局搜了一下，大部分能进入这个callbackQueue里的都是和root有关系
+  // 或者是挂载在root.callbackNode上
   flushSyncCallbackQueue();
   return null;
 }
@@ -538,4 +555,214 @@ function commitPlacement(finishedWork: Fiber): void {
     node = node.sibling;
   }
 }
+```
+
+
+----------------
+
+
+接下来是第三个循环`commitLayoutEffects`. 包括关于生命周期
+
+
+```js
+function commitLayoutEffects(
+  root: FiberRoot,
+  committedExpirationTime: ExpirationTime,
+) {
+  // TODO: Should probably move the bulk of this function to commitWork.
+  while (nextEffect !== null) {
+
+    const effectTag = nextEffect.effectTag;
+
+    if (effectTag & (Update | Callback)) {
+      // 通过变量++ 记录effect
+      recordEffect();
+      const current = nextEffect.alternate;
+      // 其实是commitLifeCycles的改名
+      commitLayoutEffectOnFiber(
+        root,
+        current,
+        nextEffect,
+        committedExpirationTime,
+      );
+    }
+
+    if (effectTag & Ref) {
+      recordEffect();
+      // attachRef
+      commitAttachRef(nextEffect);
+    }
+
+    if (effectTag & Passive) {
+      rootDoesHavePassiveEffects = true;
+    }
+
+    resetCurrentDebugFiberInDEV();
+    nextEffect = nextEffect.nextEffect;
+  }
+}
+```
+
+
+追上面追进来`commitLifeCycles`（`commitLayoutEffectOnFiber`）。
+
+这里主要是关于组件生命周期的，以最熟悉的`classComponent`来说主要是调用`componentDidMount`或者`componentDidUpdate`。以及会把`updateQueue`中的`capturedUpdate`里遍历执行`callback`，然后清空
+
+而`FunctionComponent`,`ForwardRef`,`SimpleMemoComponent` 主要是对hooks链表的一些处理。比如`useEffect`
+
+
+
+```js
+// react-reconciler/src/ReactFiberCommitWork.js
+function commitLifeCycles(
+  finishedRoot: FiberRoot,
+  current: Fiber | null,
+  finishedWork: Fiber,
+  committedExpirationTime: ExpirationTime,
+): void {
+  switch (finishedWork.tag) {
+    case FunctionComponent:
+    case ForwardRef:
+    case SimpleMemoComponent: {
+      // 对hooks链表的一些操作
+      commitHookEffectList(UnmountLayout, MountLayout, finishedWork);
+      break;
+    }
+    case ClassComponent: {
+      const instance = finishedWork.stateNode;
+      if (finishedWork.effectTag & Update) {
+        // current === null 表示 didMount 否则就走didUpdate
+        // todo  这里需要观察追踪一下何时把finishedWork
+        if (current === null) {
+          startPhaseTimer(finishedWork, 'componentDidMount');
+          // 有一些prevState和memoziedState； prevProps和memoziedProps的比较
+          // 不同完全相等， 这里todo去理解 什么时候把finishedWork.alternate置空的 在render 的时候
+
+          // commit阶段最后就执行didMount
+          instance.componentDidMount();
+          stopPhaseTimer();
+        } else {
+          const prevProps =
+            finishedWork.elementType === finishedWork.type
+              ? current.memoizedProps
+              : resolveDefaultProps(finishedWork.type, current.memoizedProps);
+          const prevState = current.memoizedState;
+          startPhaseTimer(finishedWork, 'componentDidUpdate');
+          
+          instance.componentDidUpdate(
+            prevProps,
+            prevState,
+            // __reactInternalSnapshotBeforeUpdate 在commitBeforeMutationLifeCycles里存储
+            // 所以可以存进来
+            instance.__reactInternalSnapshotBeforeUpdate,
+          );
+          stopPhaseTimer();
+        }
+      }
+      const updateQueue = finishedWork.updateQueue;
+      if (updateQueue !== null) {
+        // We could update instance props and state here,
+        // but instead we rely on them being set during last render.
+        // TODO: revisit this when we implement resuming.
+        // 这里有关于updateQueue里的capturedUpdate链表的操作。
+        // 会遍历里面的所有capturedUpdate, 包括执行capturedUpdate上的callback，并且清空这个链表
+        commitUpdateQueue(
+          finishedWork,
+          updateQueue,
+          instance,
+          committedExpirationTime,
+        );
+      }
+      return;
+    }
+    case HostRoot: {
+      const updateQueue = finishedWork.updateQueue;
+      if (updateQueue !== null) {
+        let instance = null;
+        if (finishedWork.child !== null) {
+          switch (finishedWork.child.tag) {
+            case HostComponent:
+              instance = getPublicInstance(finishedWork.child.stateNode);
+              break;
+            case ClassComponent:
+              instance = finishedWork.child.stateNode;
+              break;
+          }
+        }
+        commitUpdateQueue(
+          finishedWork,
+          updateQueue,
+          instance,
+          committedExpirationTime,
+        );
+      }
+      return;
+    }
+    case HostComponent: {
+      const instance: Instance = finishedWork.stateNode;
+
+      // Renderers may schedule work to be done after host components are mounted
+      // (eg DOM renderer may schedule auto-focus for inputs and form controls).
+      // These effects should only be committed when components are first mounted,
+      // aka when there is no current/alternate.
+      if (current === null && finishedWork.effectTag & Update) {
+        const type = finishedWork.type;
+        const props = finishedWork.memoizedProps;
+        commitMount(instance, type, props, finishedWork);
+      }
+
+      return;
+    }
+    case HostText: {
+      // We have no life-cycles associated with text.
+      return;
+    }
+    case HostPortal: {
+      // We have no life-cycles associated with portals.
+      return;
+    }
+    case Profiler: {
+      if (enableProfilerTimer) {
+        const onRender = finishedWork.memoizedProps.onRender;
+
+        if (typeof onRender === 'function') {
+          if (enableSchedulerTracing) {
+            onRender(
+              finishedWork.memoizedProps.id,
+              current === null ? 'mount' : 'update',
+              finishedWork.actualDuration,
+              finishedWork.treeBaseDuration,
+              finishedWork.actualStartTime,
+              getCommitTime(),
+              finishedRoot.memoizedInteractions,
+            );
+          } else {
+            onRender(
+              finishedWork.memoizedProps.id,
+              current === null ? 'mount' : 'update',
+              finishedWork.actualDuration,
+              finishedWork.treeBaseDuration,
+              finishedWork.actualStartTime,
+              getCommitTime(),
+            );
+          }
+        }
+      }
+      return;
+    }
+    case SuspenseComponent:
+    case SuspenseListComponent:
+    case IncompleteClassComponent:
+    case FundamentalComponent:
+      return;
+    default: {
+      invariant(
+        false,
+        'This unit of work tag should not have side-effects. This error is ' +
+          'likely caused by a bug in React. Please file an issue.',
+      );
+    }
+  }
+}
+
 ```
