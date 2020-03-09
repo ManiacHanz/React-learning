@@ -382,6 +382,8 @@ function commitRootImpl(root, renderPriorityLevel) {
     // a ReactDOM.render-ed root inside of batchedUpdates. The commit fired
     // synchronously, but layout updates should be deferred until the end
     // of the batch.
+    // 通过reactDOM.render会走到这里面。解释说的是版本的遗留问题，commit是sync触发，但是layout的更新应该在
+    // 批量更新之后
     return null;
   }
 

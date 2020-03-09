@@ -113,6 +113,8 @@ function legacyRenderSubtreeIntoContainer(
      * unbatchedUpdates 代表不是批量更新，这里和包括setState在内的整个调度和更新流程有关
      * 这里先理解成相当于这里直接执行了updateContainer方法
      * 先直接看里面的updateContainer方法
+     * 
+     * 在updateContainer的方法里，这个整个dom都已经渲染出来了
      */
     unbatchedUpdates(() => {
       updateContainer(children, fiberRoot, parentComponent, callback);

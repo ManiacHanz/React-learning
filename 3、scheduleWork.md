@@ -125,7 +125,9 @@ export function scheduleUpdateOnFiber(
   } else {
     scheduleCallbackForRoot(root, priorityLevel, expirationTime);
   }
-
+  
+  // reactDOM.render不会走到下面的条件里，
+  // 至于何时走进来 todo
   if (
     (executionContext & DiscreteEventContext) !== NoContext &&
     // Only updates at user-blocking priority or greater are considered
