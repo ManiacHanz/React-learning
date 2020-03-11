@@ -27,7 +27,7 @@ const CommitContext = /*                */ 0b100000;		 // 代表在commit阶段
 
 // 比如说通过计算判断是否在unbatchedContext
 (executionContext & LegacyUnbatchedContext) !== NoContext
-// 比如说是否已经在render阶段
+// 比如说是否已经在render阶段或者commit阶段
 (executionContext & (RenderContext | CommitContext)) === NoContext
 ```
 
@@ -86,7 +86,8 @@ export function scheduleUpdateOnFiber(
 	 * 该变量会在不同任务是修改，任务优先级越高权重值越大
    * 大概从高到低分了5个等级 从1-5数字越大代表优先级越低
    * 从ReactDom.render这里进来返回的是97
-	 * 暂时不知道是哪个值过来的
+	 * 表示的意思是NormalPriority
+   * 这个权重只能说初始化的权重，由于是renderRoot，没有经过其他的update或者权重比较，所以这里就是普通
    */
   const priorityLevel = getCurrentPriorityLevel();
 	// 记得expirationTime进来的值为sync么
@@ -174,6 +175,7 @@ function markUpdateTimeFromFiberToRoot(fiber, expirationTime) {
 				既要更新子节点的current的expirationTime，也要更新子节点workInProgress的expirationTime
 				node.childExpirationTime已经是子节点中的最大值？@TODO 待验证
 				注：但是这里没有找child的siblings，而是直接找的return
+        答: 因为在调度里每个叶节点的effect都放在了它的父节点上 这个在reactFiberWork的beginWork和completeUnitOfWork里
       */
       alternate = node.alternate;
       if (node.childExpirationTime < expirationTime) {

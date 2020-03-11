@@ -14,7 +14,7 @@ function renderRoot(
 
   // If the root or expiration time have changed, throw out the existing stack
   // and prepare a fresh one. Otherwise we'll continue where we left off.
-  // 在ReactDOM.render的时候,workInProgressRoot还为null,这里不知道要重新看一下current和workInProgress的关系
+  // 在ReactDOM.render的时候,workInProgressRoot还为null,、这里的workInProgress是这个文件里的全局变量，而不是current.alternate
   // workInProgressRoot会在prepareFreshStack里赋值
   // expirationTime 此时为Sync ，
   // 而renderExpirationTime此时为NoWork，唯一会变成expirationTime的时候就是在下面的prepareFreshStack方法里
@@ -267,7 +267,7 @@ export function createWorkInProgress(
   // 和current同步的属性
   workInProgress.childExpirationTime = current.childExpirationTime;
   workInProgress.expirationTime = current.expirationTime;
-
+  // 这些复杂类型都是同一指针
   workInProgress.child = current.child;
   workInProgress.memoizedProps = current.memoizedProps;
   workInProgress.memoizedState = current.memoizedState;
