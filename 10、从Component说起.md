@@ -5,7 +5,7 @@
 
 其实在`ReactBaseClasses.js`里的代码很简单，`Component`也不是什么神秘的东西，一个简单的构造函数，`PureComponent`一个简单的继承。
 
-唯一我们应该看的是`setState`和`forceUpdate`，而看着两个需要看到传入的updater是什么，于是要去找`new Component`的过程，但是全局搜索这个并不能找到，所以找下`Component(`，发现其实答案在`beginWork`里根据`workInProgress.tag`去分类型进行调和的过程中处理的，这个所以有关调和的部分我们都放在下一章讲
+唯一我们应该看的是`setState`和`forceUpdate`，而看着两个需要看到传入的updater是什么，于是要去找`new Component`的过程，但是全局搜索这个并不能找到，所以找下`Component(`，发现其实答案在`beginWork`里根据`workInProgress.tag`去分类型进行调和的过程中处理的，这个所以有关调和的部分我们都放在下一章讲，下一章从updateClassComponent讲起，如何构建关于classComponent的一切
 
 ```js
 // react/src/ReactBaseClasses.js
