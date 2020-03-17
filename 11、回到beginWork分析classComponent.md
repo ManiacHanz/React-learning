@@ -1,5 +1,0 @@
-
-所以在work阶段以前，react所有的操作都停留在fiber对象的处理阶段，不论是对于expirationTime的计算或者对于update的操作更新，都不涉及对于不同的component的类型的处理。只有进入work阶段开始，遍历树的时候，才会根据`workInProgress.tag`的不同值，对应不同的`component`类型进行处理。
-
-这里先从最常用的`classComponent`的处理开始看，后面会延伸到其他的类型的component
-
