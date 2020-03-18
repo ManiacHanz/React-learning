@@ -97,6 +97,7 @@ function updateClassComponent(
       nextProps,
       renderExpirationTime,
     );
+    // 主要是用给finishClassComponent用的
     shouldUpdate = true;
   } else if (current === null) {
     // In a resume, we'll already have an instance we can reuse.
