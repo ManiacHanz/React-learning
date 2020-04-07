@@ -67,7 +67,9 @@ function completeWork(
           newProps,
           rootContainerInstance,
         );
-
+        // FlareApi 是react事件系统中的扩展
+        // 是一个实验性的功能，用来实现跨端及跨平台的事件处理
+        // The idea is to extend React's event system to include high-level events that allow for consistent cross-device and cross-platform behavior.
         if (enableFlareAPI) {
           const prevListeners = current.memoizedProps.listeners;
           const nextListeners = newProps.listeners;
@@ -86,37 +88,20 @@ function completeWork(
           markRef(workInProgress);
         }
       } else {
-        if (!newProps) {
-          invariant(
-            workInProgress.stateNode !== null,
-            'We must have new props for new mounts. This error is likely ' +
-              'caused by a bug in React. Please file an issue.',
-          );
-          // This can happen when we abort work.
-          break;
-        }
 
         const currentHostContext = getHostContext();
         // TODO: Move createInstance to beginWork and keep it on a context
         // "stack" as the parent. Then append children as we go in beginWork
         // or completeWork depending on we want to add then top->down or
         // bottom->up. Top->down is faster in IE11.
+        // 对于hydrate fiber的一个全局变量，相当于hydrate里的wIP
         let wasHydrated = popHydrationState(workInProgress);
         if (wasHydrated) {
-          // TODO: Move this and createInstance step into the beginPhase
-          // to consolidate.
-          if (
-            prepareToHydrateHostInstance(
-              workInProgress,
-              rootContainerInstance,
-              currentHostContext,
-            )
-          ) {
-            // If changes to the hydrated node needs to be applied at the
-            // commit-phase we mark this as such.
-            markUpdate(workInProgress);
-          }
+          // hydrate渲染 略
         } else {
+          // 这里的createInstance就会变成分成多端的instance实例。包括后来的动态编译的语言应该是从这里开始进行的分流
+          // 这里我们先不看react-native，先看react-dom端的
+          // 这里生成的是相当于就是真实的dom了，并且能通过__reactInternalInstance和__reactEventHandlers访问fiber和pendingProps
           let instance = createInstance(
             type,
             newProps,
@@ -126,18 +111,6 @@ function completeWork(
           );
 
           appendAllChildren(instance, workInProgress, false, false);
-
-          if (enableFlareAPI) {
-            const listeners = newProps.listeners;
-            if (listeners != null) {
-              updateEventListeners(
-                listeners,
-                instance,
-                rootContainerInstance,
-                workInProgress,
-              );
-            }
-          }
 
           // Certain renderers require commit-time effects for initial mount.
           // (eg DOM renderer supports auto-focus for certain elements).
@@ -196,5 +169,113 @@ function completeWork(
   }
 
   return null;
+}
+```
+
+
+
+```js
+// react-dom/src/client/ReactDOMHostConfig.js
+export function createInstance(
+  type: string,
+  props: Props,
+  rootContainerInstance: Container,
+  hostContext: HostContext,
+  internalInstanceHandle: Object,
+): Instance {
+  let parentNamespace: string;
+  if (__DEV__) {
+    // TODO: take namespace into account when validating.
+    const hostContextDev = ((hostContext: any): HostContextDev);
+    validateDOMNesting(type, null, hostContextDev.ancestorInfo);
+    if (
+      typeof props.children === 'string' ||
+      typeof props.children === 'number'
+    ) {
+      const string = '' + props.children;
+      const ownAncestorInfo = updatedAncestorInfo(
+        hostContextDev.ancestorInfo,
+        type,
+      );
+      validateDOMNesting(null, string, ownAncestorInfo);
+    }
+    parentNamespace = hostContextDev.namespace;
+  } else {
+    parentNamespace = ((hostContext: any): HostContextProd);
+  }
+  const domElement: Instance = createElement(
+    type,
+    props,
+    rootContainerInstance,
+    parentNamespace,
+  );
+  // 这两步是把domElement以及pendingProps缓存到element的属性上
+  // const internalInstanceKey = '__reactInternalInstance$' + randomKey;
+  // const internalEventHandlersKey = '__reactEventHandlers$' + randomKey;
+  precacheFiberNode(internalInstanceHandle, domElement);
+  updateFiberProps(domElement, props);
+  // 返回完成的domElement  这里就是vdom变成html dom的过程
+  return domElement;
+}
+
+// react-dom/src/client/ReactDOMComponentTree.js
+export function updateFiberProps(node, props) {
+  node[internalEventHandlersKey] = props;
+}
+
+export function precacheFiberNode(hostInst, node) {
+  node[internalInstanceKey] = hostInst;
+}
+```
+
+
+```js
+// react-reconciler/src/ReactFiberCompleteWork.js
+// 通过遍历整颗fiber树，把所有的真实dom挂在上去
+// 链接的过程是按照父子相连，然后在遍历儿子的过程中找到儿子的兄弟节点，并赋值成同一个parent，然后进行append
+appendAllChildren = function(
+  parent: Instance,
+  workInProgress: Fiber,
+  needsVisibilityToggle: boolean,
+  isHidden: boolean,
+) {
+  // We only have the top Fiber that was created but we need recurse down its
+  // children to find all the terminal nodes.
+  let node = workInProgress.child;
+  while (node !== null) {
+    if (node.tag === HostComponent || node.tag === HostText) {
+      appendInitialChild(parent, node.stateNode);
+    } else if (node.tag === FundamentalComponent) {
+      appendInitialChild(parent, node.stateNode.instance);
+    } else if (node.tag === HostPortal) {
+      // If we have a portal child, then we don't want to traverse
+      // down its children. Instead, we'll get insertions from each child in
+      // the portal directly.
+    } else if (node.child !== null) {
+      node.child.return = node;
+      node = node.child;
+      continue;
+    }
+    if (node === workInProgress) {
+      return;
+    }
+    while (node.sibling === null) {
+      if (node.return === null || node.return === workInProgress) {
+        return;
+      }
+      node = node.return;
+    }
+    node.sibling.return = node.return;
+    node = node.sibling;
+  }
+};
+
+// react-dom/src/client/ReactDOMHostConfig.js
+export function appendInitialChild(
+  parentInstance: Instance,
+  child: Instance | TextInstance,
+): void {
+  // 这里调用的就是html的方法了
+  parentInstance.appendChild(child);
 }
 ```
