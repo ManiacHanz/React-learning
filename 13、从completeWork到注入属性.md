@@ -109,7 +109,10 @@ function completeWork(
             currentHostContext,
             workInProgress,
           );
-
+          
+          // 通过遍历把所有的dom通过不同平台的方法添加上去
+          // 比如web端就用append方法
+          // 这里的遍历也是while(node !== null) 的一次树遍历，但是中间也分一个小循环和整体的大循环，这里以后可以研究
           appendAllChildren(instance, workInProgress, false, false);
 
           // Certain renderers require commit-time effects for initial mount.
@@ -126,6 +129,7 @@ function completeWork(
           ) {
             markUpdate(workInProgress);
           }
+          // 把instance挂在stateNode上
           workInProgress.stateNode = instance;
         }
 
@@ -172,7 +176,146 @@ function completeWork(
 }
 ```
 
+```js
+// react-dom/src/client/ReactDOMHostConfig.js
+export function finalizeInitialChildren(
+  domElement: Instance,
+  type: string,
+  props: Props,
+  rootContainerInstance: Container,
+  hostContext: HostContext,
+): boolean {
+  // 在setInitialProperties方法里就开始注入事件系统
+  setInitialProperties(domElement, type, props, rootContainerInstance);
+  return shouldAutoFocusHostComponent(type, props);
+}
+```
 
+可以看到setInitialProperties有三个部分，trapBubbledEvent， setInitialDOMProperties以及最后的 track部分，下一节一点一点讲
+
+```js
+// react-dom/src/client/ReactDOMComponent.js
+export function setInitialProperties(
+  domElement: Element,
+  tag: string,
+  rawProps: Object,
+  rootContainerElement: Element | Document,
+): void {
+  // 根据tag标签判断是不是自定义组价标签，比如包括 '-' 的组件等等
+  const isCustomComponentTag = isCustomComponent(tag, rawProps);
+
+  // TODO: Make sure that we check isMounted before firing any of these events.
+  let props: Object;
+  switch (tag) {
+    case 'iframe':
+    case 'object':
+    case 'embed':
+      trapBubbledEvent(TOP_LOAD, domElement);
+      props = rawProps;
+      break;
+    case 'video':
+    case 'audio':
+      // Create listener for each media event
+      for (let i = 0; i < mediaEventTypes.length; i++) {
+        trapBubbledEvent(mediaEventTypes[i], domElement);
+      }
+      props = rawProps;
+      break;
+    case 'source':
+      trapBubbledEvent(TOP_ERROR, domElement);
+      props = rawProps;
+      break;
+    case 'img':
+    case 'image':
+    case 'link':
+      trapBubbledEvent(TOP_ERROR, domElement);
+      trapBubbledEvent(TOP_LOAD, domElement);
+      props = rawProps;
+      break;
+    case 'form':
+      trapBubbledEvent(TOP_RESET, domElement);
+      trapBubbledEvent(TOP_SUBMIT, domElement);
+      props = rawProps;
+      break;
+    case 'details':
+      trapBubbledEvent(TOP_TOGGLE, domElement);
+      props = rawProps;
+      break;
+    case 'input':
+      ReactDOMInputInitWrapperState(domElement, rawProps);
+      props = ReactDOMInputGetHostProps(domElement, rawProps);
+      trapBubbledEvent(TOP_INVALID, domElement);
+      // For controlled components we always need to ensure we're listening
+      // to onChange. Even if there is no listener.
+      ensureListeningTo(rootContainerElement, 'onChange');
+      break;
+    case 'option':
+      ReactDOMOptionValidateProps(domElement, rawProps);
+      props = ReactDOMOptionGetHostProps(domElement, rawProps);
+      break;
+    case 'select':
+      ReactDOMSelectInitWrapperState(domElement, rawProps);
+      props = ReactDOMSelectGetHostProps(domElement, rawProps);
+      trapBubbledEvent(TOP_INVALID, domElement);
+      // For controlled components we always need to ensure we're listening
+      // to onChange. Even if there is no listener.
+      ensureListeningTo(rootContainerElement, 'onChange');
+      break;
+    case 'textarea':
+      ReactDOMTextareaInitWrapperState(domElement, rawProps);
+      props = ReactDOMTextareaGetHostProps(domElement, rawProps);
+      trapBubbledEvent(TOP_INVALID, domElement);
+      // For controlled components we always need to ensure we're listening
+      // to onChange. Even if there is no listener.
+      ensureListeningTo(rootContainerElement, 'onChange');
+      break;
+    default:
+      props = rawProps;
+  }
+  // 一些错误断言，包括dangerousHtml等等，略过
+  assertValidProps(tag, props);
+
+  setInitialDOMProperties(
+    tag,
+    domElement,
+    rootContainerElement,
+    props,
+    isCustomComponentTag,
+  );
+
+  switch (tag) {
+    case 'input':
+      // TODO: Make sure we check if this is still unmounted or do any clean
+      // up necessary since we never stop tracking anymore.
+      track((domElement: any));
+      ReactDOMInputPostMountWrapper(domElement, rawProps, false);
+      break;
+    case 'textarea':
+      // TODO: Make sure we check if this is still unmounted or do any clean
+      // up necessary since we never stop tracking anymore.
+      track((domElement: any));
+      ReactDOMTextareaPostMountWrapper(domElement, rawProps);
+      break;
+    case 'option':
+      ReactDOMOptionPostMountWrapper(domElement, rawProps);
+      break;
+    case 'select':
+      ReactDOMSelectPostMountWrapper(domElement, rawProps);
+      break;
+    default:
+      if (typeof props.onClick === 'function') {
+        // TODO: This cast may not be sound for SVG, MathML or custom elements.
+        trapClickOnNonInteractiveElement(((domElement: any): HTMLElement));
+      }
+      break;
+  }
+}
+```
+
+
+
+
+createInstance主要是根据各种类型createElement，这里就不细说了
 
 ```js
 // react-dom/src/client/ReactDOMHostConfig.js
