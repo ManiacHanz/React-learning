@@ -145,8 +145,13 @@ function insertScheduledTask(newTask, expirationTime) {
 
 可以看到`scheduleCallback`主要是做一个插入队列的工作，在没有任务执行的情况下，通过`postMessage`或者`rAF`触发`flushWork`。
 
+`flushWork`的逻辑很简单，只判断了一个是否帧过期，以及在这两种情况下怎么安排执行任务，执行任务的方法还是`flushTask`
+
 
 ```js
+// 这里两个参数有点绕，需要到performWorkUntilDeadline去找
+// hasTimeRemaining表示当前帧是否有剩余时间用来做任务
+// initialTime表示当前帧执行任务开始的时间
 function flushWork(hasTimeRemaining, initialTime) {
   // We'll need a host callback the next time work is scheduled.
   isHostCallbackScheduled = false;
@@ -157,14 +162,20 @@ function flushWork(hasTimeRemaining, initialTime) {
   }
 
   let currentTime = initialTime;
+  // 检查delayTask链表里，是否有任务的startTime已经在currentTime之前了
+  // 有的话则把delay任务加入到task链表里
   advanceTimers(currentTime);
 
+  // 表示任务正在执行
   isPerformingWork = true;
+  // 这里执行的错误将会直接抛出
   try {
+    // 当前帧没有剩余时间
     if (!hasTimeRemaining) {
       // Flush all the expired callbacks without yielding.
       // TODO: Split flushWork into two separate functions instead of using
       // a boolean argument?
+      // 没有剩余时间的情况下只处理超时时间过了的任务
       while (
         firstTask !== null &&
         firstTask.expirationTime <= currentTime &&
@@ -172,26 +183,35 @@ function flushWork(hasTimeRemaining, initialTime) {
       ) {
         flushTask(firstTask, currentTime);
         currentTime = getCurrentTime();
+        // 同时重新去delay任务里找有没有需要开始的任务
         advanceTimers(currentTime);
       }
     } else {
       // Keep flushing callbacks until we run out of time in the frame.
+      // 当前帧还有剩余时间
       if (firstTask !== null) {
         do {
+          // flushTask执行完毕后会看firstTask执行后的返回值是否是一个function
+          // 如果是，会使用currentTime再次放入任务队列中
           flushTask(firstTask, currentTime);
           currentTime = getCurrentTime();
           advanceTimers(currentTime);
         } while (
           firstTask !== null &&
+          // 判断是否帧的deadline已经过了
           !shouldYieldToHost() &&
           !(enableSchedulerDebugging && isSchedulerPaused)
         );
       }
     }
     // Return whether there's additional work
+    // 到这里会有两种情况
+    // 1. 帧时间过期，并且没有紧急任务
+    // 2. 帧不过期 没有剩余任务了，也没有应该开始的delay任务
     if (firstTask !== null) {
       return true;
     } else {
+      // 尝试提前触发delay任务
       if (firstDelayedTask !== null) {
         requestHostTimeout(
           handleTimeout,
@@ -201,8 +221,138 @@ function flushWork(hasTimeRemaining, initialTime) {
       return false;
     }
   } finally {
+    // 还回来标识
     isPerformingWork = false;
   }
 }
 
 ```
+
+
+`flushTask`, 执行单个任务的方法。执行以后会把执行结果保存下来，如果结果仍然是一个`function`
+
+```js
+function flushTask(task, currentTime) {
+  // Remove the task from the list before calling the callback. That way the
+  // list is in a consistent state even if the callback throws.
+  // 对task链表的处理
+  // 主要是为了把task从链表里抽离出来 ，同时链接上task原本的前后节点
+  const next = task.next;
+  if (next === task) {
+    // This is the only scheduled task. Clear the list.
+    firstTask = null;
+  } else {
+    // Remove the task from its position in the list.
+    // 把当前要处理的task 从task链表里移除
+    if (task === firstTask) {
+      firstTask = next;
+    }
+    const previous = task.previous;
+    previous.next = next;
+    next.previous = previous;
+  }
+  task.next = task.previous = null;
+
+  // Now it's safe to execute the task.
+  // 注意这里是处理任务的callback，task本身只是一个包含了各种信息的对象
+  var callback = task.callback;
+  // 把任务及权重保存下来
+  var previousPriorityLevel = currentPriorityLevel;
+  var previousTask = currentTask;
+  currentPriorityLevel = task.priorityLevel;
+  currentTask = task;
+  var continuationCallback;
+  try {
+    // 任务是否已经超时
+    var didUserCallbackTimeout = task.expirationTime <= currentTime;
+    // Add an extra function to the callstack. Profiling tools can use this
+    // to infer the priority of work that appears higher in the stack.
+    // 通过不同任务的权重，分配不同的处理方法
+    switch (currentPriorityLevel) {
+      case ImmediatePriority:
+        continuationCallback = scheduler_flushTaskAtPriority_Immediate(
+          callback,
+          didUserCallbackTimeout,
+        );
+        break;
+      case UserBlockingPriority:
+        continuationCallback = scheduler_flushTaskAtPriority_UserBlocking(
+          callback,
+          didUserCallbackTimeout,
+        );
+        break;
+      case NormalPriority:
+        continuationCallback = scheduler_flushTaskAtPriority_Normal(
+          callback,
+          didUserCallbackTimeout,
+        );
+        break;
+      case LowPriority:
+        continuationCallback = scheduler_flushTaskAtPriority_Low(
+          callback,
+          didUserCallbackTimeout,
+        );
+        break;
+      case IdlePriority:
+        continuationCallback = scheduler_flushTaskAtPriority_Idle(
+          callback,
+          didUserCallbackTimeout,
+        );
+        break;
+    }
+  } catch (error) {
+    throw error;
+  } finally {
+    currentPriorityLevel = previousPriorityLevel;
+    currentTask = previousTask;
+  }
+
+  // A callback may return a continuation. The continuation should be scheduled
+  // with the same priority and expiration as the just-finished callback.
+  if (typeof continuationCallback === 'function') {
+    var expirationTime = task.expirationTime;
+    // 如果执行结果仍然是一个function, 就把task的callback改成这个执行结果
+    var continuationTask = task;
+    continuationTask.callback = continuationCallback;
+
+    // Insert the new callback into the list, sorted by its timeout. This is
+    // almost the same as the code in `scheduleCallback`, except the callback
+    // is inserted into the list *before* callbacks of equal timeout instead
+    // of after.
+    // 然后把修改过的重新插入到链表里
+    // 仍然按照它之前的过期时间等信息
+    if (firstTask === null) {
+      // This is the first callback in the list.
+      firstTask = continuationTask.next = continuationTask.previous = continuationTask;
+    } else {
+      var nextAfterContinuation = null;
+      var t = firstTask;
+      // 按照权重顺序排
+      do {
+        if (expirationTime <= t.expirationTime) {
+          // This task times out at or after the continuation. We will insert
+          // the continuation *before* this task.
+          nextAfterContinuation = t;
+          break;
+        }
+        t = t.next;
+      } while (t !== firstTask);
+      if (nextAfterContinuation === null) {
+        // No equal or lower priority task was found, which means the new task
+        // is the lowest priority task in the list.
+        nextAfterContinuation = firstTask;
+      } else if (nextAfterContinuation === firstTask) {
+        // The new task is the highest priority task in the list.
+        firstTask = continuationTask;
+      }
+
+      const previous = nextAfterContinuation.previous;
+      previous.next = nextAfterContinuation.previous = continuationTask;
+      continuationTask.next = nextAfterContinuation;
+      continuationTask.previous = previous;
+    }
+  }
+}
+```
+
+
